@@ -2,7 +2,7 @@
 
 This is the official implementation of our paper accepted by CVPR 2025 
 
-[[Website]](https://sites.google.com/view/taeyeop-lee/any6d)
+[[Website]](https://sites.google.com/view/taeyeop-lee/any6d) [[Paper]](https://arxiv.org/pdf/2503.18673)
 
 Authors: Taeyeop Lee, Bowen Wen, Minjun Kang, Gyuree Kang, In So Kweon, Kuk-Jin Yoon
 
