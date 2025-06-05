@@ -1,0 +1,230 @@
+
+__pycache__/
+
+
+.idea/
+
+results
+sam2/checkpoints/
+instantmesh/ckpts/
+instantmesh/outputs/
+
+foundationpose/build
+foundationpose/weights
+__pycache__
+build
+dist
+
+
+
+.vscode/
+.DS_Store
+sam2/__pycache__/
+sam2/*-checkpoint.ipynb
+sam2/.venv
+*.egg*
+sam2/build/*
+sam2/_C.*
+sam2/outputs/*
+sam2/checkpoints/*.pt
+
+
+
+
+
+
+# Byte-compiled / optimized / DLL files
+foundationpose/__pycache__/
+foundationpose/.history
+foundationpose/exp/
+foundationpose/*.py[cod]
+foundationpose/*$py.class
+# C extensions
+foundationpose/*.so
+foundationpose/BundleTrack/build
+# Distribution / packaging
+foundationpose/.Python
+foundationpose/build/
+foundationpose/develop-eggs/
+foundationpose/*.zip
+foundationpose/demo_data/*
+foundationpose/dist/
+# foundationpose/*.png
+# foundationpose/*.jpg
+foundationpose/debug/
+foundationpose/weights/*
+foundationpose/downloads/
+foundationpose/eggs/
+foundationpose/.eggs/
+foundationpose/lib/
+foundationpose/lib64/
+foundationpose/parts/
+foundationpose/sdist/
+foundationpose/var/
+foundationpose/.vscode/
+foundationpose/wheels/
+foundationpose/wandb/
+foundationpose/*.blend1
+foundationpose/*.tar.*
+foundationpose/*.zip
+foundationpose/*.svg
+foundationpose/sacred/
+foundationpose/artifacts/
+foundationpose/pip-wheel-metadata/
+foundationpose/share/python-wheels/
+foundationpose/*.egg-info/
+foundationpose/.installed.cfg
+foundationpose/*.egg
+foundationpose/MANIFEST
+
+# PyInstaller
+foundationpose/*.manifest
+foundationpose/*.spec
+
+# Installer logs
+foundationpose/pip-log.txt
+foundationpose/pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+foundationpose/htmlcov/
+foundationpose/.tox/
+foundationpose/.nox/
+foundationpose/.coverage
+foundationpose/.coverage.*
+foundationpose/.cache
+foundationpose/nosetests.xml
+foundationpose/demo_data/
+foundationpose/debug/
+foundationpose/coverage.xml
+foundationpose/*.cover
+foundationpose/*.py,cover
+foundationpose/.hypothesis/
+foundationpose/.pytest_cache/
+foundationpose/*.pth
+foundationpose/weights/
+
+# Translations
+foundationpose/*.mo
+foundationpose/*.pot
+
+# Django stuff:
+foundationpose/*.log
+foundationpose/local_settings.py
+foundationpose/db.sqlite3
+foundationpose/db.sqlite3-journal
+
+# Flask stuff:
+foundationpose/instance/
+foundationpose/.webassets-cache
+foundationpose/cosypose/experiments
+
+# Scrapy stuff:
+foundationpose/.scrapy
+
+# Sphinx documentation
+foundationpose/docs/_build/
+
+# PyBuilder
+foundationpose/target/
+
+# Jupyter Notebook
+foundationpose/.ipynb_checkpoints
+
+# IPython
+foundationpose/profile_default/
+foundationpose/ipython_config.py
+
+# pyenv
+foundationpose/.python-version
+
+# pipenv
+# foundationpose/Pipfile.lock
+
+# PEP 582
+foundationpose/__pypackages__/
+
+# Celery stuff
+foundationpose/celerybeat-schedule
+foundationpose/celerybeat.pid
+
+# SageMath parsed files
+foundationpose/*.sage.py
+
+# Environments
+foundationpose/.env
+foundationpose/.venv
+foundationpose/env/
+foundationpose/venv/
+foundationpose/ENV/
+foundationpose/env.bak/
+foundationpose/venv.bak/
+
+# Spyder project settings
+foundationpose/.spyderproject
+foundationpose/.spyproject
+
+# Rope project settings
+foundationpose/.ropeproject
+
+# mkdocs documentation
+foundationpose/site
+
+# mypy
+foundationpose/.mypy_cache/
+foundationpose/.dmypy.json
+foundationpose/dmypy.json
+
+# Pyre type checker
+foundationpose/.pyre/
+
+# Datasets
+foundationpose/data/
+foundationpose/logs/
+!foundationpose/BundleTrack/XMem/inference/data
+foundationpose/run_used.yml
+
+
+
+# Byte-compiled / optimized / DLL files
+instantmesh/__pycache__/
+instantmesh/*.py[cod]
+instantmesh/*$py.class
+
+# C extensions
+instantmesh/*.so
+
+# Distribution / packaging
+instantmesh/.Python
+instantmesh/build/
+instantmesh/develop-eggs/
+instantmesh/dist/
+instantmesh/eggs/
+instantmesh/.eggs/
+instantmesh/.vscode/
+instantmesh/lib/
+instantmesh/lib64/
+instantmesh/parts/
+instantmesh/sdist/
+instantmesh/var/
+instantmesh/wheels/
+instantmesh/*.egg-info/
+instantmesh/.installed.cfg
+instantmesh/*.egg
+instantmesh/MANIFEST
+
+instantmesh/.DS_Store
+
+instantmesh/tools/objaverse_rendering/blender-3.2.2-linux-x64/
+instantmesh/tools/objaverse_rendering/output/
+instantmesh/ckpts/
+instantmesh/lightning_logs/
+instantmesh/logs/
+instantmesh/.trash/
+instantmesh/.env/
+instantmesh/outputs/
+instantmesh/figures*/
+
+# Useless Files
+instantmesh/*.sh
+instantmesh/blender/
+instantmesh/.restore/
