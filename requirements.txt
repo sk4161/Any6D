@@ -83,7 +83,7 @@ open3d==0.18.0
 
 pytorch-lightning==2.1.2
 gradio==3.41.2
-huggingface-hub==0.24.0
+huggingface-hub>=0.16.4
 einops
 omegaconf
 torchmetrics
@@ -93,7 +93,7 @@ tensorboard
 PyMCubes
 trimesh
 rembg
-transformers==4.34.1
+transformers==4.41.2
 diffusers==0.20.2
 bitsandbytes
 imageio[ffmpeg]
