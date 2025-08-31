@@ -32,12 +32,15 @@ RUN conda init bash &&\
     FORCE_CUDA=1 python -m pip install --no-cache-dir kaolin==0.16.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html &&\
     pip install --extra-index-url https://miropsota.github.io/torch_packages_builder pytorch3d==0.7.8+pt2.4.1cu121
 
+# this is needed to link where conda installs eigen3 vs where it is expected
+RUN ln -s /opt/conda/envs/Any6D/include/eigen3 /usr/local/include/eigen3
+
 RUN conda init bash &&\
     conda activate Any6D &&\
     export CMAKE_PREFIX_PATH=$CONDA_PREFIX/lib/python3.9/site-packages/pybind11/share/cmake/pybind11 &&\
     cd foundationpose/mycpp && mkdir -p build && cd build && cmake .. -DPYTHON_EXECUTABLE=$(which python) && make -j11 &&\
     cd ../.. &&\
-    cd bundlesdf/mycuda && rm -rf build *egg* && CPPFLAGS="-I/opt/conda/envs/Any6D/include/eigen3" pip install -e . &&\
+    cd bundlesdf/mycuda && rm -rf build *egg* && pip install -e . &&\
     cd .. && cd ..
 
 RUN conda init bash &&\
