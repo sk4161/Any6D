@@ -23,12 +23,14 @@ if __name__=='__main__':
     seed_everything(0)
 
     parser = argparse.ArgumentParser(description="Set experiment name and paths")
-    parser.add_argument("--ycb_model_path", type=str, default="/home/miruware/ssd_4tb/dataset/ho3d/YCB_Video_Models", help="Path to the YCB Video Models")
+    # Use no hardcoded default. Allow env var fallback via YCB_MODEL_PATH.
+    parser.add_argument("--ycb_model_path", type=str, default=None, help="Path to the YCB Video Models (or set env YCB_MODEL_PATH)")
     parser.add_argument("--img_to_3d", action="store_true",help="Running with InstantMesh+SAM2")
     args = parser.parse_args()
 
 
-    ycb_model_path = args.ycb_model_path
+    # Prefer CLI arg, then environment variable, otherwise None
+    ycb_model_path = args.ycb_model_path or os.getenv("YCB_MODEL_PATH")
     img_to_3d = args.img_to_3d
 
     results = []
@@ -86,22 +88,29 @@ if __name__=='__main__':
     gt_pose = np.eye(4)
     gt_pose[:3, :] = tmp
 
-    gt_mesh = trimesh.load(f'{ycb_model_path}/models/006_mustard_bottle/textured_simple.obj')
-
-    chamfer_dis = calculate_chamfer_distance_gt_mesh(gt_pose, gt_mesh, pred_pose, est.mesh)
-    print(chamfer_dis)
+    chamfer_dis = None
+    gt_mesh_file = None
+    if ycb_model_path is not None:
+        gt_mesh_file = os.path.join(ycb_model_path, 'models', '006_mustard_bottle', 'textured_simple.obj')
+    
+    if gt_mesh_file is not None and os.path.isfile(gt_mesh_file):
+        gt_mesh = trimesh.load(gt_mesh_file)
+        chamfer_dis = calculate_chamfer_distance_gt_mesh(gt_pose, gt_mesh, pred_pose, est.mesh)
+        print(chamfer_dis)
+    else:
+        print("[WARN] YCB model not found. Set --ycb_model_path or YCB_MODEL_PATH to compute Chamfer distance.")
 
     np.savetxt(os.path.join(save_path, f'{obj}_initial_pose.txt'), pred_pose)
     np.savetxt(os.path.join(save_path, f'{obj}_gt_pose.txt'), gt_pose)
     est.mesh.export(os.path.join(save_path, f'final_mesh_{obj}.obj'))
 
-    np.savetxt(os.path.join(save_path, f'{obj}_cd.txt'), [chamfer_dis])
+    if chamfer_dis is not None:
+        np.savetxt(os.path.join(save_path, f'{obj}_cd.txt'), [chamfer_dis])
 
     results.append({
         'Object': obj,
         'Object_Number': obj_num,
         'Chamfer_Distance': float(chamfer_dis)
         })
-
 
 
