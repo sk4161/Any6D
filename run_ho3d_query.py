@@ -144,7 +144,7 @@ if __name__ == "__main__":
         K_anchor = np.loadtxt(reader.get_reference_K(anchor_path))
 
         gt_mesh = reader.get_gt_mesh(ycb_model_path)
-        gt_diameter = reader.get_gt_mesh_diamter()
+        gt_diameter = reader.get_gt_mesh_diamter(ycb_model_path)
         mesh = trimesh.load(reader.get_reference_view_1_mesh(anchor_path))
 
         gt_mesh_dict = {
