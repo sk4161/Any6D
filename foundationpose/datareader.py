@@ -7,9 +7,10 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 
-from foundationpose.Utils import *
-import json, os, sys
+import json
+import os
 
+from foundationpose.Utils import *
 
 BOP_LIST = ["lmo", "tless", "ycbv", "hb", "tudl", "icbin", "itodd"]
 BOP_DIR = os.getenv("BOP_DIR")
@@ -132,8 +133,12 @@ class Ho3dReader:
     #   mesh = trimesh.load(f'{self.ho3d_root}/models/{ob_name}/textured_simple.obj')
     #   return mesh
 
-    def get_gt_mesh_diamter(self):
-        gt_diameter = calc_pts_diameter(np.array(self.get_gt_mesh().vertices))
+    def get_gt_mesh_diamter(
+        self, model_dir="/home/miruware/ssd_4tb/dataset/ho3d/YCB_Video_Models"
+    ):
+        gt_diameter = calc_pts_diameter(
+            np.array(self.get_gt_mesh(model_dir=model_dir).vertices)
+        )
         return gt_diameter
 
     def get_depth(self, i):
@@ -228,11 +233,11 @@ class YcbineoatReader:
         self.video_dir = video_dir
         self.downscale = downscale
         self.zfar = zfar
-        self.color_files = sorted(glob.glob(f"{self.video_dir}/rgb/*.png"))
+        self.color_files = sorted(glob.glob(f"{self.video_dir}/rgb/*.jpg"))
         self.K = np.loadtxt(f"{video_dir}/cam_K.txt").reshape(3, 3)
         self.id_strs = []
         for color_file in self.color_files:
-            id_str = os.path.basename(color_file).replace(".png", "")
+            id_str = os.path.basename(color_file).replace(".jpg", "")
             self.id_strs.append(id_str)
         self.H, self.W = cv2.imread(self.color_files[0]).shape[:2]
 
