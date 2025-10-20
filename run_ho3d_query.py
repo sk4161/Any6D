@@ -1,4 +1,6 @@
 import copy
+import yaml as pyyaml
+import wandb
 
 from foundationpose.datareader import Ho3dReader
 from estimater import *
@@ -10,20 +12,69 @@ from bop_toolkit_lib.renderer_vispy import RendererVispy
 from pytorch_lightning import seed_everything
 from datetime import datetime
 
+
+class MissingGroundTruthError(RuntimeError):
+    """Raised when a query frame lacks ground-truth pose."""
+
+    def __init__(self, frame_index: int):
+        super().__init__(f"Ground-truth pose is unavailable for frame {frame_index}")
+        self.frame_index = frame_index
+
+
 if __name__ == "__main__":
     seed_everything(0)
 
     parser = argparse.ArgumentParser(description="Set experiment name and paths")
 
     parser.add_argument("--name", type=str, default="any6d", help="Experiment name")
+
+    # Anchor reference arguments (matching run_ho3d_anchor.py)
     parser.add_argument(
-        "--anchor_path",
+        "--anchor-image",
         type=str,
-        default="/home/miruware/ssd_4tb/cvpr_2025_results/anchor_results/dexycb_reference_view_ours",
-        help="Path to the YCB-V model info JSON",
+        required=True,
+        help="Path to the anchor image",
     )
     parser.add_argument(
-        "--hot3d_data_root",
+        "--anchor-mask",
+        type=str,
+        required=True,
+        help="Path to the anchor mask image file",
+    )
+    parser.add_argument(
+        "--anchor-depth",
+        type=str,
+        required=True,
+        help="Path to the anchor depth image",
+    )
+    parser.add_argument(
+        "--anchor-calibration",
+        type=str,
+        required=True,
+        help="Path to the anchor calibration yml file",
+    )
+    parser.add_argument(
+        "--anchor-object-pose",
+        type=str,
+        required=True,
+        help="Path to the anchor object GT pose txt file",
+    )
+    parser.add_argument(
+        "--anchor-pred-pose",
+        type=str,
+        required=True,
+        help="Path to the anchor predicted pose txt file",
+    )
+    parser.add_argument(
+        "--anchor-mesh",
+        type=str,
+        required=True,
+        help="Path to the anchor mesh file",
+    )
+
+    # HO3D dataset arguments
+    parser.add_argument(
+        "--ho3d_data_root",
         type=str,
         default="/home/miruware/ssd_4tb/dataset/ho3d",
         help="Path to the HO3D dataset root",
@@ -35,29 +86,65 @@ if __name__ == "__main__":
         help="Path to the YCB Video Models",
     )
     parser.add_argument(
-        "--ycbv_modesl_info_path",
+        "--ycbv_models_info_path",
         type=str,
         default="./models_info.json",
         help="Path to the YCB-V model info JSON",
+    )
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        required=True,
+        help="Directory to save output files",
+    )
+    parser.add_argument(
+        "--sequence",
+        type=str,
+        default=None,
+        help="Specific HO3D sequence to process (e.g., AP10, SM1). If not provided, processes all sequences.",
     )
     parser.add_argument("--running_stride", type=int, default=10, help="Running stride")
 
     args = parser.parse_args()
 
+    # Parse arguments
     name = args.name
-    hot3d_data_root = args.hot3d_data_root
-    ycbv_modesl_info_path = args.ycbv_modesl_info_path
+    anchor_image = args.anchor_image
+    anchor_mask = args.anchor_mask
+    anchor_depth = args.anchor_depth
+    anchor_calibration = args.anchor_calibration
+    anchor_object_pose = args.anchor_object_pose
+    anchor_pred_pose = args.anchor_pred_pose
+    anchor_mesh = args.anchor_mesh
+    ho3d_data_root = args.ho3d_data_root
+    ycbv_models_info_path = args.ycbv_models_info_path
     running_stride = args.running_stride
-    anchor_path = args.anchor_path
     ycb_model_path = args.ycb_model_path
+    save_dir = args.save_dir
+    sequence = args.sequence
 
+    # Initialize wandb
+    wandb.init(
+        project="any6d-ho3d-evaluation",
+        name=f"{name}_{sequence if sequence else 'all_sequences'}",
+        config={
+            "experiment_name": name,
+            "sequence": sequence,
+            "running_stride": running_stride,
+            "ho3d_data_root": ho3d_data_root,
+            "ycb_model_path": ycb_model_path,
+            "anchor_image": anchor_image,
+            "anchor_mesh": anchor_mesh,
+        }
+    )
+
+    # Create save directory
     date_str = f"{datetime.now():%Y-%m-%d_%H-%M-%S}"
-    save_root = f"./results/ho3d_results/{name}/{date_str}"
-    save_results_est_path = f"{save_root}"
-
+    save_results_est_path = os.path.join(save_dir, f"{name}_{date_str}")
     os.makedirs(save_results_est_path, exist_ok=True)
 
-    obj_folder = [
+    # Define all available sequences
+    all_sequences = [
         "MPM10",
         "MPM11",
         "MPM12",
@@ -72,6 +159,19 @@ if __name__ == "__main__":
         "SB13",
         "SM1",
     ]
+
+    # Filter sequences based on argument
+    if sequence is not None:
+        if sequence in all_sequences:
+            obj_folder = [sequence]
+            print(f"Processing single sequence: {sequence}")
+        else:
+            print(f"Error: Sequence '{sequence}' not found in available sequences.")
+            print(f"Available sequences: {', '.join(all_sequences)}")
+            exit(1)
+    else:
+        obj_folder = all_sequences
+        print(f"Processing all {len(all_sequences)} sequences")
 
     object_metrics = {
         obj: {
@@ -124,14 +224,14 @@ if __name__ == "__main__":
     data = []
 
     for obj_f in tqdm(obj_folder, desc="Evaluating Object"):
-        video_dir = os.path.join(f"{hot3d_data_root}/evaluation", obj_f)
-        reader = Ho3dReader(video_dir, hot3d_data_root)
+        video_dir = os.path.join(f"{ho3d_data_root}", obj_f)
+        reader = Ho3dReader(video_dir, ho3d_data_root)
         reader.color_files = reader.color_files[::running_stride]
 
         ob_id = reader.get_obj_id()
 
         # get bop information
-        with open(ycbv_modesl_info_path, "r") as f:
+        with open(ycbv_models_info_path, "r") as f:
             model_info = json.load(f)
         trans_disc = [{"R": np.eye(3), "t": np.array([[0, 0, 0]]).T}]  # Identity.
         if "symmetries_discrete" in model_info[f"{ob_id}"]:
@@ -141,11 +241,22 @@ if __name__ == "__main__":
                 t = sym_4x4[:3, 3].reshape((3, 1))
                 trans_disc.append({"R": R, "t": t})
 
-        K_anchor = np.loadtxt(reader.get_reference_K(anchor_path))
+        # Load anchor calibration from yml file
+        with open(anchor_calibration, "r") as file:
+            calib_data = pyyaml.unsafe_load(file)
+
+        # Extract intrinsic matrix
+        K_anchor = np.array(
+            [
+                [calib_data["color"]["fx"], 0.0, calib_data["color"]["ppx"]],
+                [0.0, calib_data["color"]["fy"], calib_data["color"]["ppy"]],
+                [0.0, 0.0, 1.0],
+            ]
+        )
 
         gt_mesh = reader.get_gt_mesh(ycb_model_path)
         gt_diameter = reader.get_gt_mesh_diamter(ycb_model_path)
-        mesh = trimesh.load(reader.get_reference_view_1_mesh(anchor_path))
+        mesh = trimesh.load(anchor_mesh)
 
         gt_mesh_dict = {
             "pts": np.asarray(gt_mesh.vertices) * 1e3,
@@ -154,136 +265,171 @@ if __name__ == "__main__":
         }
         renderer.my_add_object(gt_mesh_dict, ob_id)
 
-        pred_pose_a = np.loadtxt(reader.get_reference_view_1_pose(anchor_path))
-        gt_pose_a = np.loadtxt(
-            reader.get_reference_view_1_pose(anchor_path).replace("initial", "gt")
-        )
+        # Load anchor poses from the provided files
+        gt_pose_a = np.loadtxt(anchor_object_pose)  # Ground truth anchor pose
+        pred_pose_a = np.loadtxt(anchor_pred_pose)  # Predicted anchor pose
 
         est.reset_object(mesh=mesh, symmetry_tfs=None)
 
         for i in tqdm(range(0, len(reader.color_files), 1), desc=f"{obj_f} - Frames"):
-            gt_pose_q = reader.get_gt_pose(i)
+            try:
+                gt_pose_q = reader.get_gt_pose(i)
 
-            if gt_pose_q is None:
-                continue
+                if gt_pose_q is None:
+                    raise MissingGroundTruthError(i)
 
-            color_file = reader.color_files[i]
-            color = cv2.cvtColor(cv2.imread(color_file), cv2.COLOR_BGR2RGB)
-            H, W = color.shape[:2]
-            depth = reader.get_depth(i)
-            mask = reader.get_mask(i).astype(np.bool_)
-            pred_pose_q = est.register(
-                K=reader.K,
-                rgb=color,
-                depth=depth,
-                ob_mask=mask,
-                iteration=5,
-                name=obj_f,
-            )
+                color_file = reader.color_files[i]
+                color = cv2.cvtColor(cv2.imread(color_file), cv2.COLOR_BGR2RGB)
+                H, W = color.shape[:2]
+                depth = reader.get_depth(i)
+                mask_result = reader.get_mask(i)
+                if mask_result is None:
+                    raise MissingGroundTruthError(i)
+                mask = mask_result.astype(np.bool_)
+                pred_pose_q = est.register(
+                    K=reader.K,
+                    rgb=color,
+                    depth=depth,
+                    ob_mask=mask,
+                    iteration=5,
+                    name=obj_f,
+                )
 
-            pose_aq = pred_pose_q @ np.linalg.inv(pred_pose_a)  # obtained pose A->Q
-            pred_q = pose_aq @ gt_pose_a
+                pose_aq = pred_pose_q @ np.linalg.inv(pred_pose_a)  # obtained pose A->Q
+                pred_q = pose_aq @ gt_pose_a
 
-            err_R, err_T = compute_RT_distances(pred_q, gt_pose_q)
+                err_R, err_T = compute_RT_distances(pred_q, gt_pose_q)
 
-            pose_recall_th = [(5, 5), (5, 10), (10, 10)]
+                pose_recall_th = [(5, 5), (5, 10), (10, 10)]
 
-            for r_th, t_th in pose_recall_th:
-                succ_r, succ_t = err_R <= r_th, err_T <= t_th
-                succ_pose = np.logical_and(succ_r, succ_t).astype(float)
+                for r_th, t_th in pose_recall_th:
+                    succ_r, succ_t = err_R <= r_th, err_T <= t_th
+                    succ_pose = np.logical_and(succ_r, succ_t).astype(float)
 
-            add = compute_add(gt_mesh.vertices, pred_q, gt_pose_q)
-            adds = compute_adds(gt_mesh.vertices, pred_q, gt_pose_q)
+                add = compute_add(gt_mesh.vertices, pred_q, gt_pose_q)
+                adds = compute_adds(gt_mesh.vertices, pred_q, gt_pose_q)
 
-            add_thres = float(add <= gt_diameter * 0.1)
-            adds_thres = float(adds <= gt_diameter * 0.1)
+                add_thres = float(add <= gt_diameter * 0.1)
+                adds_thres = float(adds <= gt_diameter * 0.1)
 
-            pred_q, gt_pose_q = pred_q.astype(np.float16), gt_pose_q.astype(np.float16)
+                pred_q, gt_pose_q = (
+                    pred_q.astype(np.float16),
+                    gt_pose_q.astype(np.float16),
+                )
 
-            pred_r, pred_t = pred_q[:3, :3], np.expand_dims(pred_q[:3, 3], axis=1) * 1e3
-            gt_r, gt_t = (
-                gt_pose_q[:3, :3],
-                np.expand_dims(gt_pose_q[:3, 3], axis=1) * 1e3,
-            )
+                pred_r, pred_t = (
+                    pred_q[:3, :3],
+                    np.expand_dims(pred_q[:3, 3], axis=1) * 1e3,
+                )
+                gt_r, gt_t = (
+                    gt_pose_q[:3, :3],
+                    np.expand_dims(gt_pose_q[:3, 3], axis=1) * 1e3,
+                )
 
-            mssd_err = (
-                mssd(
+                mssd_err = (
+                    mssd(
+                        pose_est=pred_q,
+                        pose_gt=gt_pose_q,
+                        pts=gt_mesh.vertices,
+                        syms=trans_disc,
+                    )
+                    * 1e3
+                )
+                mspd_err = mspd(
                     pose_est=pred_q,
                     pose_gt=gt_pose_q,
                     pts=gt_mesh.vertices,
+                    K=reader.K,
                     syms=trans_disc,
                 )
-                * 1e3
-            )
-            mspd_err = mspd(
-                pose_est=pred_q,
-                pose_gt=gt_pose_q,
-                pts=gt_mesh.vertices,
-                K=reader.K,
-                syms=trans_disc,
-            )
 
-            mssd_rec = np.array([0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5])
-            mspd_rec = np.array([5, 10, 15, 20, 25, 30, 35, 40, 45, 50])
-
-            vsd_delta = 15.0
-            vsd_taus = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
-            vsd_rec = np.array([0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5])
-
-            vsd_errs = vsd(
-                pred_r,
-                pred_t,
-                gt_r,
-                gt_t,
-                (depth * 1e3),
-                reader.K.reshape(3, 3),
-                vsd_delta,
-                vsd_taus,
-                True,
-                (gt_diameter * 1e3),
-                renderer,
-                ob_id,
-            )
-            vsd_errs = np.asarray(vsd_errs)
-            all_vsd_recs = np.stack([vsd_errs < rec_i for rec_i in vsd_rec], axis=1)
-            mean_vsd = all_vsd_recs.mean()
-
-            mssd_cur_rec = mssd_rec * (gt_diameter * 1e3)
-            mean_mssd = (mssd_err < mssd_cur_rec).mean()
-            mean_mspd = (mspd_err < mspd_rec).mean()
-
-            mean_ar = (mean_mssd + mean_mspd + mean_vsd) / 3.0
-
-            object_metrics[obj_f]["ADD"].append(add_thres)
-            object_metrics[obj_f]["ADD-S"].append(adds_thres)
-            object_metrics[obj_f]["AR"].append(mean_ar)
-            object_metrics[obj_f]["VSD"].append(mean_vsd)
-            object_metrics[obj_f]["MSSD"].append(mean_mssd)
-            object_metrics[obj_f]["MSPD"].append(mean_mspd)
-            object_metrics[obj_f]["R error"].append(err_R.tolist()[0])
-            object_metrics[obj_f]["T error"].append(err_T.tolist()[0])
-            object_metrics[obj_f]["cls_id"].append(obj_f)
-            object_metrics[obj_f]["instance_id"].append(obj_count)
-
-            try:
-                visualize_frame_results_gt(
-                    color=color,
-                    gt_mesh=gt_mesh,
-                    K=reader.K,
-                    gt_pose=gt_pose_q,
-                    pred_pose=pred_pose_q,
-                    metric=object_metrics[obj_f],
-                    obj_f=f"{obj_f}",
-                    frame_idx=i,
-                    save_path=save_results_est_path,
-                    glctx=glctx,
-                    name=f"{len(reader.color_files)}_{name}",
-                    nocs_metric=True,
-                    est_mesh=est.mesh,
+                mssd_rec = np.array(
+                    [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
                 )
-            except:
-                pass
-            obj_count += 1
+                mspd_rec = np.array([5, 10, 15, 20, 25, 30, 35, 40, 45, 50])
+
+                vsd_delta = 15.0
+                vsd_taus = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+                vsd_rec = np.array(
+                    [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+                )
+
+                vsd_errs = vsd(
+                    pred_r,
+                    pred_t,
+                    gt_r,
+                    gt_t,
+                    (depth * 1e3),
+                    reader.K.reshape(3, 3),
+                    vsd_delta,
+                    vsd_taus,
+                    True,
+                    (gt_diameter * 1e3),
+                    renderer,
+                    ob_id,
+                )
+                vsd_errs = np.asarray(vsd_errs)
+                all_vsd_recs = np.stack([vsd_errs < rec_i for rec_i in vsd_rec], axis=1)
+                mean_vsd = all_vsd_recs.mean()
+
+                mssd_cur_rec = mssd_rec * (gt_diameter * 1e3)
+                mean_mssd = (mssd_err < mssd_cur_rec).mean()
+                mean_mspd = (mspd_err < mspd_rec).mean()
+
+                mean_ar = (mean_mssd + mean_mspd + mean_vsd) / 3.0
+
+                object_metrics[obj_f]["ADD"].append(add_thres)
+                object_metrics[obj_f]["ADD-S"].append(adds_thres)
+                object_metrics[obj_f]["AR"].append(mean_ar)
+                object_metrics[obj_f]["VSD"].append(mean_vsd)
+                object_metrics[obj_f]["MSSD"].append(mean_mssd)
+                object_metrics[obj_f]["MSPD"].append(mean_mspd)
+                object_metrics[obj_f]["R error"].append(err_R.tolist()[0])
+                object_metrics[obj_f]["T error"].append(err_T.tolist()[0])
+                object_metrics[obj_f]["cls_id"].append(obj_f)
+                object_metrics[obj_f]["instance_id"].append(obj_count)
+
+                # Log frame-level metrics to wandb
+                wandb.log({
+                    "frame_idx": i,
+                    "sequence": obj_f,
+                    "frame_count": obj_count,
+                    "ADD": add_thres,
+                    "ADD-S": adds_thres,
+                    "AR": mean_ar,
+                    "VSD": mean_vsd,
+                    "MSSD": mean_mssd,
+                    "MSPD": mean_mspd,
+                    "R_error": err_R.item(),
+                    "T_error": err_T.item(),
+                    "ADD_distance": add,
+                    "ADD-S_distance": adds,
+                })
+
+                try:
+                    visualize_frame_results_gt(
+                        color=color,
+                        gt_mesh=gt_mesh,
+                        K=reader.K,
+                        gt_pose=gt_pose_q,
+                        pred_pose=pred_pose_q,
+                        metric=object_metrics[obj_f],
+                        obj_f=f"{obj_f}",
+                        frame_idx=i,
+                        save_path=save_results_est_path,
+                        glctx=glctx,
+                        name=f"{len(reader.color_files)}_{name}",
+                        nocs_metric=True,
+                        est_mesh=est.mesh,
+                    )
+                except Exception as viz_error:
+                    print(f"Warning: Visualization failed for frame {i}: {viz_error}")
+
+                obj_count += 1
+
+            except MissingGroundTruthError as e:
+                print(f"Skipping frame {e.frame_index}: {e}")
+                continue
 
         df_obj = pd.DataFrame(
             {
@@ -339,6 +485,19 @@ if __name__ == "__main__":
         }
 
         data.append(row_data)
+
+        # Log sequence-level metrics to wandb
+        wandb.log({
+            f"sequence_{obj_f}/ADD_mean": means_all['ADD'],
+            f"sequence_{obj_f}/ADD-S_mean": means_all['ADD-S'],
+            f"sequence_{obj_f}/AR_mean": means_all['AR'],
+            f"sequence_{obj_f}/VSD_mean": means_all['VSD'],
+            f"sequence_{obj_f}/MSSD_mean": means_all['MSSD'],
+            f"sequence_{obj_f}/MSPD_mean": means_all['MSPD'],
+            f"sequence_{obj_f}/R_error_mean": means_all['R_error'],
+            f"sequence_{obj_f}/T_error_mean": means_all['T_error'],
+            f"sequence_{obj_f}/frame_count": len(object_metrics[obj_f]['ADD']),
+        })
 
         df_obj.to_excel(
             f"{save_results_est_path}/{obj_f}_metrics_results.xlsx", index=False
@@ -412,3 +571,18 @@ if __name__ == "__main__":
 
     print("\nSaved data preview:")
     print(df_all_frames)
+
+    # Log final overall metrics to wandb
+    wandb.log({
+        "overall/ADD_mean": overall_means['ADD'],
+        "overall/ADD-S_mean": overall_means['ADD-S'],
+        "overall/AR_mean": overall_means['AR'],
+        "overall/VSD_mean": overall_means['VSD'],
+        "overall/MSSD_mean": overall_means['MSSD'],
+        "overall/MSPD_mean": overall_means['MSPD'],
+        "overall/total_frames": len(df_all_frames) - 1,  # -1 for the MEAN row
+        "overall/sequences_processed": len(obj_folder),
+    })
+
+    # Close wandb run
+    wandb.finish()
