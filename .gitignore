@@ -228,3 +228,7 @@ instantmesh/figures*/
 instantmesh/*.sh
 instantmesh/blender/
 instantmesh/.restore/
+
+wandb/
+*.png
+*.xlsx
