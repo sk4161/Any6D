@@ -232,3 +232,7 @@ instantmesh/.restore/
 wandb/
 *.png
 *.xlsx
+*.mtl
+*.obj
+*.txt
+*.zip
