@@ -837,3 +837,126 @@ class TudlReader(BopBaseReader):
     def get_gt_mesh_file(self, ob_id):
         mesh_file = f"{self.base_dir}/../../../tudl_models/models/obj_{ob_id:06d}.ply"
         return mesh_file
+
+
+class TyolReader(BopBaseReader):
+    def __init__(self, base_dir, object_id=None, zfar=np.inf, resize=1):
+        super().__init__(base_dir, zfar, resize)
+        self.dataset_name = "tyol"
+        self.object_id = object_id  # Specific object ID to track (1-21)
+        
+        # TYO-L specific image dimensions
+        self.H, self.W = 480, 640
+        
+        # Scene information
+        scene_id = os.path.basename(base_dir.rstrip('/'))
+        self.scene_id = int(scene_id)
+        
+    @property
+    def K(self):
+        return self.get_K(0)  # Use first frame's K matrix
+    
+    def get_color(self, i):
+        color_file = self.color_files[i]
+        color = cv2.imread(color_file)
+        if self.resize != 1:
+            color = cv2.resize(color, (int(self.W * self.resize), int(self.H * self.resize)))
+        return color
+    
+    def get_depth(self, i):
+        color_file = self.color_files[i]
+        base_name = os.path.basename(color_file).split('.')[0]
+        depth_file = f"{self.base_dir}/depth/{base_name}.png"
+        
+        depth = cv2.imread(depth_file, -1)
+        depth = depth.astype(np.float32) / 1000.0  # Convert mm to meters
+        depth = depth / self.bop_depth_scale  # Apply BOP depth scale
+        
+        if self.resize != 1:
+            depth = cv2.resize(depth, (int(self.W * self.resize), int(self.H * self.resize)))
+        return depth
+    
+    def get_mask(self, i, object_id=None):
+        if object_id is None:
+            object_id = self.object_id
+        if object_id is None:
+            raise ValueError("Object ID must be specified either in constructor or as parameter")
+            
+        color_file = self.color_files[i]
+        base_name = os.path.basename(color_file).split('.')[0]
+        
+        # TYO-L mask format: {frame_id}_{instance_id}.png (use mask_visib for visible masks)
+        mask_file = f"{self.base_dir}/mask_visib/{base_name}_000000.png"
+        
+        if not os.path.exists(mask_file):
+            # Return empty mask if file doesn't exist
+            mask = np.zeros((self.H, self.W), dtype=np.uint8)
+        else:
+            mask = cv2.imread(mask_file, -1)
+            if mask is None:
+                mask = np.zeros((self.H, self.W), dtype=np.uint8)
+            else:
+                # TYO-L masks are already binary masks (0 and 255)
+                # No need to filter by object_id since each scene has only one object
+                pass  # mask is already in the correct format
+        
+        if self.resize != 1:
+            mask = cv2.resize(mask, (int(self.W * self.resize), int(self.H * self.resize)))
+        return mask
+    
+    def get_gt_pose(self, i, object_id=None):
+        if object_id is None:
+            object_id = self.object_id
+        if object_id is None:
+            raise ValueError("Object ID must be specified either in constructor or as parameter")
+            
+        if self.scene_gt is None:
+            return None
+            
+        frame_key = str(i)
+        if frame_key not in self.scene_gt:
+            return None
+            
+        # Find the object in the scene ground truth
+        objects_in_frame = self.scene_gt[frame_key]
+        for obj_data in objects_in_frame:
+            if obj_data["obj_id"] == object_id:
+                # Convert BOP format (R as 9-element list, t as 3-element list) to 4x4 matrix
+                R = np.array(obj_data["cam_R_m2c"]).reshape(3, 3)
+                t = np.array(obj_data["cam_t_m2c"]).reshape(3, 1) / 1000.0  # Convert mm to meters
+                
+                pose = np.eye(4)
+                pose[:3, :3] = R
+                pose[:3, 3:4] = t
+                return pose
+        
+        return None  # Object not found in this frame
+    
+    def get_gt_mesh(self, tyol_model_path="/raid/kanazawa/datasets/TYO-L", object_id=None):
+        if object_id is None:
+            object_id = self.object_id
+        if object_id is None:
+            raise ValueError("Object ID must be specified either in constructor or as parameter")
+            
+        mesh_file = f"{tyol_model_path}/models/obj_{object_id:06d}.ply"
+        if not os.path.exists(mesh_file):
+            raise FileNotFoundError(f"Mesh file not found: {mesh_file}")
+            
+        mesh = trimesh.load(mesh_file)
+        # Convert mesh from mm to meters to match pose units
+        mesh.vertices /= 1000.0
+        return mesh
+    
+    def get_occ_mask(self, i):
+        # TYO-L doesn't have occlusion masks, return empty mask
+        occ_mask = np.zeros((self.H, self.W), dtype=bool)
+        return occ_mask.astype(np.uint8)
+    
+    def get_video_id(self):
+        return self.scene_id
+    
+    def get_video_name(self):
+        return f"scene_{self.scene_id:06d}"
+    
+    def __len__(self):
+        return len(self.color_files)
