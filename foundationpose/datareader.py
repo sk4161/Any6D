@@ -233,11 +233,11 @@ class YcbineoatReader:
         self.video_dir = video_dir
         self.downscale = downscale
         self.zfar = zfar
-        self.color_files = sorted(glob.glob(f"{self.video_dir}/rgb/*.jpg"))
+        self.color_files = sorted(glob.glob(f"{self.video_dir}/rgb/*.png"))
         self.K = np.loadtxt(f"{video_dir}/cam_K.txt").reshape(3, 3)
         self.id_strs = []
         for color_file in self.color_files:
-            id_str = os.path.basename(color_file).replace(".jpg", "")
+            id_str = os.path.basename(color_file).replace(".png", "")
             self.id_strs.append(id_str)
         self.H, self.W = cv2.imread(self.color_files[0]).shape[:2]
 
@@ -270,10 +270,31 @@ class YcbineoatReader:
 
     def get_gt_pose(self, i):
         try:
-            pose = np.loadtxt(self.gt_pose_files[i]).reshape(4, 4)
-            return pose
-        except:
-            logging.info("GT pose not found, return None")
+            # RGB files are named with timestamps, but GT poses are sequential
+            # We need to map the RGB file index to the GT pose index
+            # Since both are sorted, we can use the original index before stride
+            
+            # Get the original index in the full color_files list
+            current_color_file = self.color_files[i]
+            
+            # Find this file in the original sorted list to get the true index
+            all_color_files = sorted(glob.glob(f"{self.video_dir}/rgb/*.png"))
+            try:
+                original_index = all_color_files.index(current_color_file)
+            except ValueError:
+                logging.info(f"Could not find {current_color_file} in original file list")
+                return None
+            
+            # Use original index to get GT pose
+            pose_file = f"{self.video_dir}/annotated_poses/{original_index:07d}.txt"
+            if os.path.exists(pose_file):
+                pose = np.loadtxt(pose_file).reshape(4, 4)
+                return pose
+            else:
+                logging.info(f"GT pose file not found: {pose_file}")
+                return None
+        except Exception as e:
+            logging.info(f"GT pose not found for frame {i}: {e}")
             return None
 
     def get_color(self, i):
@@ -296,7 +317,18 @@ class YcbineoatReader:
         return mask
 
     def get_depth(self, i):
-        depth = cv2.imread(self.color_files[i].replace("rgb", "depth"), -1) / 1e3
+        depth_file = self.color_files[i].replace("rgb", "depth")
+        depth = cv2.imread(depth_file, -1)
+        
+        if depth is None:
+            raise FileNotFoundError(f"Depth file not found: {depth_file}")
+        
+        # Handle 16-bit depth data - YCBInEOAT uses millimeters
+        if depth.dtype == np.uint16:
+            depth = depth.astype(np.float32) / 1000.0  # Convert mm to meters
+        else:
+            depth = depth.astype(np.float32) / 1e3
+        
         depth = cv2.resize(depth, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
         depth[(depth < 0.001) | (depth >= self.zfar)] = 0
         return depth
@@ -307,25 +339,18 @@ class YcbineoatReader:
         return xyz_map
 
     def get_occ_mask(self, i):
-        hand_mask_file = self.color_files[i].replace("rgb", "masks_hand")
+        # YCBInEOAT doesn't have hand masks, return empty mask
         occ_mask = np.zeros((self.H, self.W), dtype=bool)
-        if os.path.exists(hand_mask_file):
-            occ_mask = occ_mask | (cv2.imread(hand_mask_file, -1) > 0)
-
-        right_hand_mask_file = self.color_files[i].replace("rgb", "masks_hand_right")
-        if os.path.exists(right_hand_mask_file):
-            occ_mask = occ_mask | (cv2.imread(right_hand_mask_file, -1) > 0)
-
-        occ_mask = cv2.resize(
-            occ_mask, (self.W, self.H), interpolation=cv2.INTER_NEAREST
-        )
-
         return occ_mask.astype(np.uint8)
 
-    def get_gt_mesh(self):
+    def get_gt_mesh(self, ycb_model_path=None):
         ob_name = self.videoname_to_object[self.get_video_name()]
-        YCB_VIDEO_DIR = os.getenv("YCB_VIDEO_DIR")
-        mesh = trimesh.load(f"{YCB_VIDEO_DIR}/models/{ob_name}/textured_simple.obj")
+        if ycb_model_path is None:
+            YCB_VIDEO_DIR = os.getenv("YCB_VIDEO_DIR")
+            model_path = YCB_VIDEO_DIR
+        else:
+            model_path = ycb_model_path
+        mesh = trimesh.load(f"{model_path}/models/{ob_name}/textured_simple.obj")
         return mesh
 
 
