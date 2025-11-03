@@ -305,6 +305,12 @@ if __name__ == "__main__":
                     iteration=5,
                 )
 
+                # Initialize default values for metrics
+                err_R = err_T = np.array([0.0])
+                add = adds = 0.0
+                add_thres = adds_thres = 0.0
+                mean_ar = mean_vsd = mean_mssd = mean_mspd = 0.0
+
                 # Calculate metrics if ground truth is available (exactly same as HO3D)
                 if has_gt:
                     err_R, err_T = compute_RT_distances(ob_pose_pred, gt_pose)
