@@ -191,7 +191,7 @@ if __name__ == "__main__":
 
     # Align mesh and save center mesh (TLESS meshes are in mm, convert to meters)
     mesh = align_mesh_to_coordinate(mesh, scale=0.001)
-    mesh.export(os.path.join(save_path, f"center_mesh_scene{scene_id}_obj{object_id:02d}_mask{mask_id}.obj"))
+    mesh.export(os.path.join(save_path, f"center_mesh_scene{scene_id}_obj{object_id:02d}.obj"))
 
     # Initialize estimator (same as TYO-L)
     est = Any6D(symmetry_tfs=None, mesh=mesh, debug_dir=save_path, debug=0)
@@ -221,7 +221,7 @@ if __name__ == "__main__":
         gt_pose=gt_pose,
         pred_pose=pred_pose,
         metric=None,
-        obj_f=f"scene{scene_id}_obj{object_id:02d}_mask{mask_id}",
+        obj_f=f"scene{scene_id}_obj{object_id:02d}",
         frame_idx=frame_index,
         save_path=save_path,
         glctx=glctx,
@@ -238,9 +238,9 @@ if __name__ == "__main__":
     print(f"Chamfer Distance: {chamfer_dis}")
 
     # Save results (exactly same format as TYO-L)
-    np.savetxt(os.path.join(save_path, f"scene{scene_id}_obj{object_id:02d}_mask{mask_id}_predicted_pose.txt"), pred_pose)
-    est.mesh.export(os.path.join(save_path, f"final_mesh_scene{scene_id}_obj{object_id:02d}_mask{mask_id}.obj"))
-    np.savetxt(os.path.join(save_path, f"scene{scene_id}_obj{object_id:02d}_mask{mask_id}_cd.txt"), [chamfer_dis])
+    np.savetxt(os.path.join(save_path, f"scene{scene_id}_obj{object_id:02d}_predicted_pose.txt"), pred_pose)
+    est.mesh.export(os.path.join(save_path, f"final_mesh_scene{scene_id}_obj{object_id:02d}.obj"))
+    np.savetxt(os.path.join(save_path, f"scene{scene_id}_obj{object_id:02d}_cd.txt"), [chamfer_dis])
 
     # Final output (same as TYO-L)
     print(f"\nResults saved to: {save_path}")
