@@ -1,3 +1,4 @@
+import glob
 import copy
 import yaml as pyyaml
 import wandb
@@ -12,6 +13,7 @@ import json
 from bop_toolkit_lib.renderer_vispy import RendererVispy
 from pytorch_lightning import seed_everything
 from datetime import datetime
+from typing import Optional
 
 
 class MissingGroundTruthError(RuntimeError):
@@ -20,6 +22,30 @@ class MissingGroundTruthError(RuntimeError):
     def __init__(self, frame_index: int):
         super().__init__(f"Ground-truth pose is unavailable for frame {frame_index}")
         self.frame_index = frame_index
+
+
+def find_reconstructed_mesh(anchor_dir: str, object_id: int, scene_hint: Optional[str] = None) -> str:
+    """
+    Locate the reconstructed mesh produced during the anchor stage.
+    Prefers meshes that match the anchor scene hint, but falls back to any matching object file.
+    """
+    candidates = []
+    if scene_hint is not None:
+        candidates.append(
+            os.path.join(anchor_dir, f"final_mesh_scene{scene_hint}_obj{object_id:02d}.obj")
+        )
+    candidates.extend(
+        sorted(glob.glob(os.path.join(anchor_dir, f"final_mesh_*_obj{object_id:02d}.obj")))
+    )
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    raise FileNotFoundError(
+        f"No reconstructed mesh found for object {object_id} in {anchor_dir}. "
+        "Run the anchor script first to generate final_mesh_scene*_objXX.obj."
+    )
 
 
 if __name__ == "__main__":
@@ -172,14 +198,32 @@ if __name__ == "__main__":
     # Debug: Print anchor GT pose
     print(f"Anchor frame {args.anchor_frame_index}: GT translation = {anchor_gt_pose[:3, 3]}")
     
-    # Load anchor prediction results from anchor_save_dir
-    anchor_pred_pose = np.loadtxt(
-        os.path.join(args.anchor_save_dir, f"scene{args.anchor_scene_id}_obj{anchor_object_id:02d}_predicted_pose.txt")
-    ).reshape(4, 4)
-    mesh_anchor = trimesh.load(
-        os.path.join(args.anchor_save_dir, f"final_mesh_scene{args.anchor_scene_id}_obj{anchor_object_id:02d}.obj"),
-        force="mesh"
-    )
+    find_reconstructed_mesh(args.anchor_save_dir, anchor_object_id, args.anchor_scene_id)
+    mesh_cache = {}
+    anchor_pose_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+
+    def get_anchor_reference(obj_id: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Returns (anchor_gt_pose, anchor_pred_pose) for the requested object.
+        """
+        if obj_id in anchor_pose_cache:
+            return anchor_pose_cache[obj_id]
+
+        anchor_gt_obj = anchor_reader.get_gt_pose(args.anchor_frame_index, obj_id)
+        if anchor_gt_obj is None:
+            raise MissingGroundTruthError(args.anchor_frame_index)
+
+        pose_file = os.path.join(
+            args.anchor_save_dir,
+            f"scene{args.anchor_scene_id}_obj{obj_id:02d}_predicted_pose.txt",
+        )
+        if not os.path.exists(pose_file):
+            raise FileNotFoundError(
+                f"Anchor predicted pose file missing for object {obj_id}: {pose_file}"
+            )
+        anchor_pred_obj = np.loadtxt(pose_file).reshape(4, 4)
+        anchor_pose_cache[obj_id] = (anchor_gt_obj, anchor_pred_obj)
+        return anchor_pose_cache[obj_id]
 
     # Initialize results storage
     result = {
@@ -255,19 +299,39 @@ if __name__ == "__main__":
         for object_id in objects_to_process:
             print(f"\nProcessing object {object_id} in scene {scene_name}")
             
-            # Load the object mesh for this object
+            # Load anchor reference (GT + predicted pose) for HO3D-style relative transform
+            try:
+                anchor_gt_pose_obj, anchor_pred_pose_obj = get_anchor_reference(object_id)
+            except (FileNotFoundError, MissingGroundTruthError) as anchor_err:
+                print(f"Skipping object {object_id}: {anchor_err}")
+                continue
+
+            # Load the reconstructed mesh from anchor stage for estimation
+            if object_id not in mesh_cache:
+                try:
+                    mesh_path = find_reconstructed_mesh(
+                        args.anchor_save_dir, object_id, args.anchor_scene_id
+                    )
+                except FileNotFoundError as missing_mesh_err:
+                    print(missing_mesh_err)
+                    print(f"Skipping object {object_id} due to missing reconstructed mesh.")
+                    continue
+                mesh_cache[object_id] = trimesh.load(mesh_path, force="mesh")
+            reconstructed_mesh = mesh_cache[object_id].copy()
+
+            # Load the ground-truth CAD mesh for evaluation metrics only
             models_dir = os.path.join(args.tless_data_root, "models_cad")
             gt_mesh_path = os.path.join(models_dir, f"obj_{object_id:06d}.ply")
             if not os.path.exists(gt_mesh_path):
                 print(f"Model file not found: {gt_mesh_path}, skipping object {object_id}")
                 continue
-                
+
             gt_mesh = trimesh.load(gt_mesh_path)
             # Apply same scaling as in anchor script (TLESS meshes are in mm)
             gt_mesh.vertices *= 0.001
-            
+
             gt_diameter = calc_pts_diameter(np.array(gt_mesh.vertices))
-            
+
             # Setup renderer object
             gt_mesh_dict = {
                 "pts": np.asarray(gt_mesh.vertices) * 1e3,  # Convert back to mm for renderer
@@ -275,9 +339,9 @@ if __name__ == "__main__":
                 "faces": np.asarray(gt_mesh.faces),
             }
             renderer.my_add_object(gt_mesh_dict, object_id)
-            
-            # Reset object in estimator
-            est.reset_object(mesh=gt_mesh, symmetry_tfs=None)
+
+            # Reset object in estimator using reconstructed mesh
+            est.reset_object(mesh=reconstructed_mesh, symmetry_tfs=None)
 
             # TLESS objects are textureless, no specific symmetry info available
             trans_disc = [{"R": np.eye(3), "t": np.array([[0, 0, 0]]).T}]  # Identity only
@@ -338,9 +402,12 @@ if __name__ == "__main__":
                         iteration=5,
                     )
 
+                    pose_aq = ob_pose_pred @ np.linalg.inv(anchor_pred_pose_obj)
+                    pred_pose = pose_aq @ anchor_gt_pose_obj
+
                     # Calculate metrics if ground truth is available
                     if has_gt:
-                        err_R, err_T = compute_RT_distances(ob_pose_pred, gt_pose)
+                        err_R, err_T = compute_RT_distances(pred_pose, gt_pose)
 
                         pose_recall_th = [(5, 5), (5, 10), (10, 10)]
 
@@ -348,20 +415,18 @@ if __name__ == "__main__":
                             succ_r, succ_t = err_R <= r_th, err_T <= t_th
                             succ_pose = np.logical_and(succ_r, succ_t).astype(float)
 
-                        add = compute_add(gt_mesh.vertices, ob_pose_pred, gt_pose)
-                        adds = compute_adds(gt_mesh.vertices, ob_pose_pred, gt_pose)
+                        add = compute_add(gt_mesh.vertices, pred_pose, gt_pose)
+                        adds = compute_adds(gt_mesh.vertices, pred_pose, gt_pose)
 
                         add_thres = float(add <= gt_diameter * 0.1)
                         adds_thres = float(adds <= gt_diameter * 0.1)
 
-                        ob_pose_pred, gt_pose = (
-                            ob_pose_pred.astype(np.float16),
-                            gt_pose.astype(np.float16),
-                        )
+                        pred_pose = pred_pose.astype(np.float16)
+                        gt_pose = gt_pose.astype(np.float16)
 
                         pred_r, pred_t = (
-                            ob_pose_pred[:3, :3],
-                            np.expand_dims(ob_pose_pred[:3, 3], axis=1) * 1e3,  # Convert to mm
+                            pred_pose[:3, :3],
+                            np.expand_dims(pred_pose[:3, 3], axis=1) * 1e3,  # Convert to mm
                         )
                         gt_r, gt_t = (
                             gt_pose[:3, :3],
@@ -370,7 +435,7 @@ if __name__ == "__main__":
 
                         mssd_err = (
                             mssd(
-                                pose_est=ob_pose_pred,
+                                pose_est=pred_pose,
                                 pose_gt=gt_pose,
                                 pts=gt_mesh.vertices,
                                 syms=trans_disc,
@@ -378,7 +443,7 @@ if __name__ == "__main__":
                             * 1e3  # Convert to mm
                         )
                         mspd_err = mspd(
-                            pose_est=ob_pose_pred,
+                            pose_est=pred_pose,
                             pose_gt=gt_pose,
                             pts=gt_mesh.vertices,
                             K=K_query,
@@ -466,7 +531,7 @@ if __name__ == "__main__":
                             "T_error": float(err_T.item()),
                             "ADD_distance": float(add),
                             "ADD-S_distance": float(adds),
-                            "pred_pose": [[float(x) for x in row] for row in ob_pose_pred],
+                            "pred_pose": [[float(x) for x in row] for row in pred_pose],
                             "gt_pose": [[float(x) for x in row] for row in gt_pose],
                         }
                         data.append(frame_data)
@@ -476,7 +541,7 @@ if __name__ == "__main__":
                         save_results_est_path,
                         f"{scene_name}_obj{object_id:02d}_frame_{actual_frame_idx:06d}_pred_pose.txt",
                     )
-                    np.savetxt(pose_save_path, ob_pose_pred)
+                    np.savetxt(pose_save_path, pred_pose)
 
                     # Visualization
                     try:
@@ -501,7 +566,7 @@ if __name__ == "__main__":
                             gt_mesh=gt_mesh,
                             K=K_query,
                             gt_pose=gt_pose if has_gt else np.eye(4),
-                            pred_pose=ob_pose_pred,
+                            pred_pose=pred_pose,
                             metric=frame_metrics,
                             obj_f=f"{scene_name}_obj{object_id:02d}",
                             frame_idx=actual_frame_idx,
