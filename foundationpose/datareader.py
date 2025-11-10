@@ -12,7 +12,7 @@ import os
 
 from foundationpose.Utils import *
 
-BOP_LIST = ["lmo", "tless", "ycbv", "hb", "tudl", "icbin", "itodd"]
+BOP_LIST = ["lmo", "tless", "ycbv", "hb", "tudl", "icbin", "itodd", "hope"]
 BOP_DIR = os.getenv("BOP_DIR")
 
 
@@ -31,6 +31,8 @@ def get_bop_reader(video_dir, zfar=np.inf):
         return IcbinReader(video_dir, zfar=zfar)
     if "itodd" in video_dir:
         return ItoddReader(video_dir, zfar=zfar)
+    if "hope" in video_dir or "HOPE" in video_dir:
+        return HopeReader(video_dir, zfar=zfar)
     else:
         raise RuntimeError
 
@@ -54,6 +56,10 @@ def get_bop_video_dirs(dataset):
         video_dirs = sorted(glob.glob(f"{BOP_DIR}/icbin/icbin_test_bop19/test/*"))
     elif dataset == "itodd":
         video_dirs = sorted(glob.glob(f"{BOP_DIR}/itodd/itodd_test_bop19/test/*"))
+    elif dataset == "hope":
+        video_dirs = sorted(
+            glob.glob("/raid/kanazawa/datasets/hope/onboarding_dynamic/obj_*")
+        )
     else:
         raise RuntimeError
     return video_dirs
@@ -273,18 +279,20 @@ class YcbineoatReader:
             # RGB files are named with timestamps, but GT poses are sequential
             # We need to map the RGB file index to the GT pose index
             # Since both are sorted, we can use the original index before stride
-            
+
             # Get the original index in the full color_files list
             current_color_file = self.color_files[i]
-            
+
             # Find this file in the original sorted list to get the true index
             all_color_files = sorted(glob.glob(f"{self.video_dir}/rgb/*.png"))
             try:
                 original_index = all_color_files.index(current_color_file)
             except ValueError:
-                logging.info(f"Could not find {current_color_file} in original file list")
+                logging.info(
+                    f"Could not find {current_color_file} in original file list"
+                )
                 return None
-            
+
             # Use original index to get GT pose
             pose_file = f"{self.video_dir}/annotated_poses/{original_index:07d}.txt"
             if os.path.exists(pose_file):
@@ -319,16 +327,16 @@ class YcbineoatReader:
     def get_depth(self, i):
         depth_file = self.color_files[i].replace("rgb", "depth")
         depth = cv2.imread(depth_file, -1)
-        
+
         if depth is None:
             raise FileNotFoundError(f"Depth file not found: {depth_file}")
-        
+
         # Handle 16-bit depth data - YCBInEOAT uses millimeters
         if depth.dtype == np.uint16:
             depth = depth.astype(np.float32) / 1000.0  # Convert mm to meters
         else:
             depth = depth.astype(np.float32) / 1e3
-        
+
         depth = cv2.resize(depth, (self.W, self.H), interpolation=cv2.INTER_NEAREST)
         depth[(depth < 0.001) | (depth >= self.zfar)] = 0
         return depth
@@ -377,7 +385,14 @@ class BopBaseReader:
             self.scene_gt = copy.deepcopy(
                 self.scene_gt
             )  # Release file handle to be pickle-able by joblib
-            assert len(self.scene_gt) == len(self.color_files)
+            # Special handling for Hope dataset which may have fewer GT poses than frames
+            # Check if this is Hope dataset by looking at the directory path
+            is_hope_dataset = (
+                "hope" in self.base_dir.lower()
+                and "onboarding_dynamic" in self.base_dir
+            )
+            if not is_hope_dataset:
+                assert len(self.scene_gt) == len(self.color_files)
         else:
             self.scene_gt = None
 
@@ -773,7 +788,7 @@ class TlessReader(BopBaseReader):
         self.load_symmetry_tfs()
 
     def get_gt_mesh_file(self, ob_id):
-        mesh_file = f"{self.base_dir}/../../../models_cad/obj_{ob_id:06d}.ply"
+        mesh_file = f"{self.base_dir}/../../models_cad/obj_{ob_id:06d}.ply"
         return mesh_file
 
     def get_gt_mesh(self, ob_id):
@@ -844,50 +859,56 @@ class TyolReader(BopBaseReader):
         super().__init__(base_dir, zfar, resize)
         self.dataset_name = "tyol"
         self.object_id = object_id  # Specific object ID to track (1-21)
-        
+
         # TYO-L specific image dimensions
         self.H, self.W = 480, 640
-        
+
         # Scene information
-        scene_id = os.path.basename(base_dir.rstrip('/'))
+        scene_id = os.path.basename(base_dir.rstrip("/"))
         self.scene_id = int(scene_id)
-        
+
     @property
     def K(self):
         return self.get_K(0)  # Use first frame's K matrix
-    
+
     def get_color(self, i):
         color_file = self.color_files[i]
         color = cv2.imread(color_file)
         if self.resize != 1:
-            color = cv2.resize(color, (int(self.W * self.resize), int(self.H * self.resize)))
+            color = cv2.resize(
+                color, (int(self.W * self.resize), int(self.H * self.resize))
+            )
         return color
-    
+
     def get_depth(self, i):
         color_file = self.color_files[i]
-        base_name = os.path.basename(color_file).split('.')[0]
+        base_name = os.path.basename(color_file).split(".")[0]
         depth_file = f"{self.base_dir}/depth/{base_name}.png"
-        
+
         depth = cv2.imread(depth_file, -1)
         depth = depth.astype(np.float32) / 1000.0  # Convert mm to meters
         depth = depth / self.bop_depth_scale  # Apply BOP depth scale
-        
+
         if self.resize != 1:
-            depth = cv2.resize(depth, (int(self.W * self.resize), int(self.H * self.resize)))
+            depth = cv2.resize(
+                depth, (int(self.W * self.resize), int(self.H * self.resize))
+            )
         return depth
-    
+
     def get_mask(self, i, object_id=None):
         if object_id is None:
             object_id = self.object_id
         if object_id is None:
-            raise ValueError("Object ID must be specified either in constructor or as parameter")
-            
+            raise ValueError(
+                "Object ID must be specified either in constructor or as parameter"
+            )
+
         color_file = self.color_files[i]
-        base_name = os.path.basename(color_file).split('.')[0]
-        
+        base_name = os.path.basename(color_file).split(".")[0]
+
         # TYO-L mask format: {frame_id}_{instance_id}.png (use mask_visib for visible masks)
         mask_file = f"{self.base_dir}/mask_visib/{base_name}_000000.png"
-        
+
         if not os.path.exists(mask_file):
             # Return empty mask if file doesn't exist
             mask = np.zeros((self.H, self.W), dtype=np.uint8)
@@ -899,64 +920,169 @@ class TyolReader(BopBaseReader):
                 # TYO-L masks are already binary masks (0 and 255)
                 # No need to filter by object_id since each scene has only one object
                 pass  # mask is already in the correct format
-        
+
         if self.resize != 1:
-            mask = cv2.resize(mask, (int(self.W * self.resize), int(self.H * self.resize)))
+            mask = cv2.resize(
+                mask, (int(self.W * self.resize), int(self.H * self.resize))
+            )
         return mask
-    
+
     def get_gt_pose(self, i, object_id=None):
         if object_id is None:
             object_id = self.object_id
         if object_id is None:
-            raise ValueError("Object ID must be specified either in constructor or as parameter")
-            
+            raise ValueError(
+                "Object ID must be specified either in constructor or as parameter"
+            )
+
         if self.scene_gt is None:
             return None
-            
+
         frame_key = str(i)
         if frame_key not in self.scene_gt:
             return None
-            
+
         # Find the object in the scene ground truth
         objects_in_frame = self.scene_gt[frame_key]
         for obj_data in objects_in_frame:
             if obj_data["obj_id"] == object_id:
                 # Convert BOP format (R as 9-element list, t as 3-element list) to 4x4 matrix
                 R = np.array(obj_data["cam_R_m2c"]).reshape(3, 3)
-                t = np.array(obj_data["cam_t_m2c"]).reshape(3, 1) / 1000.0  # Convert mm to meters
-                
+                t = (
+                    np.array(obj_data["cam_t_m2c"]).reshape(3, 1) / 1000.0
+                )  # Convert mm to meters
+
                 pose = np.eye(4)
                 pose[:3, :3] = R
                 pose[:3, 3:4] = t
                 return pose
-        
+
         return None  # Object not found in this frame
-    
-    def get_gt_mesh(self, tyol_model_path="/raid/kanazawa/datasets/TYO-L", object_id=None):
+
+    def get_gt_mesh(
+        self, tyol_model_path="/raid/kanazawa/datasets/TYO-L", object_id=None
+    ):
         if object_id is None:
             object_id = self.object_id
         if object_id is None:
-            raise ValueError("Object ID must be specified either in constructor or as parameter")
-            
+            raise ValueError(
+                "Object ID must be specified either in constructor or as parameter"
+            )
+
         mesh_file = f"{tyol_model_path}/models/obj_{object_id:06d}.ply"
         if not os.path.exists(mesh_file):
             raise FileNotFoundError(f"Mesh file not found: {mesh_file}")
-            
+
         mesh = trimesh.load(mesh_file)
         # Convert mesh from mm to meters to match pose units
         mesh.vertices /= 1000.0
         return mesh
-    
+
     def get_occ_mask(self, i):
         # TYO-L doesn't have occlusion masks, return empty mask
         occ_mask = np.zeros((self.H, self.W), dtype=bool)
         return occ_mask.astype(np.uint8)
-    
+
     def get_video_id(self):
         return self.scene_id
-    
+
     def get_video_name(self):
         return f"scene_{self.scene_id:06d}"
-    
+
+    def __len__(self):
+        return len(self.color_files)
+
+
+class HopeReader(BopBaseReader):
+    def __init__(self, base_dir, object_id=None, zfar=np.inf, resize=1):
+        self.dataset_name = "hope"  # Set before calling parent constructor
+        super().__init__(base_dir, zfar, resize)
+        self.object_id = object_id
+
+        scene_id = os.path.basename(base_dir.rstrip("/"))
+        if scene_id.startswith("obj_"):
+            self.scene_id = int(scene_id.split("_")[1])
+        else:
+            self.scene_id = int(scene_id)
+
+        # Hope dataset specific dimensions based on scene_camera.json
+        self.H, self.W = 1080, 1920
+
+    @property
+    def K(self):
+        return self.get_K(0)
+
+    def get_gt_mesh_file(self, ob_id):
+        hope_model_path = "/raid/kanazawa/datasets/hope"
+        mesh_file = f"{hope_model_path}/models/obj_{ob_id:06d}.ply"
+        return mesh_file
+
+    def get_gt_mesh(self, ob_id):
+        mesh_file = self.get_gt_mesh_file(ob_id)
+        if not os.path.exists(mesh_file):
+            raise FileNotFoundError(f"Hope mesh file not found: {mesh_file}")
+
+        mesh = trimesh.load(mesh_file)
+        # Hope meshes are stored in mm units, convert to meters (standard BOP scaling)
+        mesh.vertices *= 1e-3  # Convert from mm to meters
+        return mesh
+
+    def get_video_id(self):
+        return self.scene_id
+
+    def get_video_name(self):
+        return f"obj_{self.scene_id:06d}"
+
+    def get_depth(self, i, filled=False):
+        # Hope dataset has depth files as .png while RGB files are .jpg
+        # Override parent method to handle extension change
+        if filled:
+            # Use parent's filled depth logic
+            return super().get_depth(i, filled=filled)
+        else:
+            # Convert RGB path to depth path with correct extension
+            depth_file = (
+                self.color_files[i].replace("rgb", "depth").replace(".jpg", ".png")
+            )
+            depth = cv2.imread(depth_file, -1)
+            if depth is None:
+                raise FileNotFoundError(f"Depth file not found: {depth_file}")
+            depth = depth * 1e-3 * self.bop_depth_scale
+
+        if self.resize != 1:
+            depth = cv2.resize(
+                depth,
+                fx=self.resize,
+                fy=self.resize,
+                dsize=None,
+                interpolation=cv2.INTER_NEAREST,
+            )
+        depth[depth < 0.001] = 0
+        depth[depth > self.zfar] = 0
+        return depth
+
+    def get_gt_pose(self, i_frame: int, ob_id, mask=None, use_my_correction=False):
+        # Hope dataset only has ground truth for frame 0
+        # Return None for other frames or if no scene_gt exists
+        # Note: mask and use_my_correction parameters kept for compatibility
+        if self.scene_gt is None:
+            return None
+
+        # For Hope dataset, only frame 0 has ground truth
+        if "0" not in self.scene_gt:
+            return None
+
+        # If requesting frame 0, return the ground truth
+        if i_frame == 0:
+            for k in self.scene_gt["0"]:
+                if k["obj_id"] == ob_id:
+                    cur = np.eye(4)
+                    cur[:3, :3] = np.array(k["cam_R_m2c"]).reshape(3, 3)
+                    cur[:3, 3] = np.array(k["cam_t_m2c"]) / 1e3
+                    return cur
+
+        # For other frames, return None (no ground truth available)
+        return None
+
     def __len__(self):
         return len(self.color_files)
